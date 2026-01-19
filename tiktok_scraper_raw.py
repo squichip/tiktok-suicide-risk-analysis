@@ -378,17 +378,55 @@ def collect_links(page, limit):
     except:
         return []
 
+def wait_for_tiktok_ready(page, timeout=180):
+    """
+    TikTok doğrulama / captcha geçilene kadar bekler.
+    Terminal input() YOK.
+    """
+    print("⏳ TikTok doğrulama kontrol ediliyor...")
+
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            url = page.url.lower()
+
+            # hâlâ verify/captcha sayfasındaysa bekle
+            if "verify" in url or "captcha" in url:
+                time.sleep(2)
+                continue
+
+            # Sayfada video linkleri gelmiş mi?
+            links = page.locator("a[href*='/video/']").count()
+            if links > 0:
+                print("✅ Doğrulama geçildi, devam ediliyor.")
+                return True
+
+        except:
+            pass
+
+        time.sleep(1)
+
+    print("⚠️ Doğrulama bekleme süresi doldu, devam ediliyor.")
+    return False
+
+
 # ======================================================
 # HASHTAG & USER SCRAPE
 # ======================================================
-def scrape_hashtag(tag, limit, script_dir):
+def scrape_hashtag(tag, limit, script_dir, headless=0):
     rows = []
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False, channel="chrome")
+        browser = p.chromium.launch(headless=bool(headless), channel="chrome")
         page = browser.new_page()
 
         page.goto(f"https://www.tiktok.com/tag/{tag}", timeout=120000)
-        input("Doğrulama varsa çöz → Enter")
+        page.goto(f"https://www.tiktok.com/tag/{tag}", timeout=120000)
+
+        wait_for_tiktok_ready(page)
+
+        page.mouse.wheel(0, 8000)
+        time.sleep(2)
+
 
         page.mouse.wheel(0, 8000)
         time.sleep(2)
@@ -402,14 +440,21 @@ def scrape_hashtag(tag, limit, script_dir):
 
     return pd.DataFrame(rows)
 
-def scrape_user(username, limit, script_dir):
+
+def scrape_user(username, limit, script_dir, headless=0):
     rows = []
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False, channel="chrome")
+        browser = p.chromium.launch(headless=bool(headless), channel="chrome")
         page = browser.new_page()
 
         page.goto(f"https://www.tiktok.com/@{username}", timeout=120000)
-        input("Doğrulama varsa çöz → Enter")
+        page.goto(f"https://www.tiktok.com/@{username}", timeout=120000)
+
+        wait_for_tiktok_ready(page)
+
+        page.mouse.wheel(0, 8000)
+        time.sleep(2)
+
 
         page.mouse.wheel(0, 8000)
         time.sleep(2)
@@ -458,33 +503,78 @@ def append_csv(csv_path, df):
 # ======================================================
 # MAIN
 # ======================================================
+# ======================================================
+# MAIN
+# ======================================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+
     parser.add_argument("--mode", choices=["hashtag", "user"], required=True)
     parser.add_argument("--query", required=True)
     parser.add_argument("--limit", type=int, default=5)
+
+    # UI ile uyumlu opsiyonlar
+    parser.add_argument(
+        "--analyze",
+        type=int,
+        choices=[0, 1],
+        default=1,
+        help="1 ise risk analizi yapar ve çıktı CSV üretir",
+    )
+    parser.add_argument(
+        "--headless",
+        type=int,
+        choices=[0, 1],
+        default=0,
+        help="1 ise tarayıcı headless (görünmez) çalışır",
+    )
+    parser.add_argument(
+        "--out_csv",
+        default="tiktok_analyzed.csv",
+        help="Çıktı CSV dosya adı (varsa üzerine yazılır)",
+    )
+
     args = parser.parse_args()
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     csv_path = os.path.join(script_dir, CSV_NAME)
 
+    # ---------------- SCRAPE ----------------
     if args.mode == "hashtag":
-        df = scrape_hashtag(args.query, args.limit, script_dir)
+        df = scrape_hashtag(
+            args.query,
+            args.limit,
+            script_dir,
+            headless=args.headless,
+        )
     else:
-        df = scrape_user(args.query, args.limit, script_dir)
+        df = scrape_user(
+            args.query,
+            args.limit,
+            script_dir,
+            headless=args.headless,
+        )
 
-        append_csv(csv_path, df)
+    if df is None or len(df) == 0:
+        print("⚠️ Veri bulunamadı, işlem sonlandırıldı.")
+        exit(0)
+
+    # Ham CSV her zaman append edilir
+    append_csv(csv_path, df)
     print("✅ HAM VERİ TOPLAMA TAMAMLANDI")
 
-    # ===========================
-    # NEW CSV: analyzed (ONLY THIS RUN)
-    # ===========================
-    analyzed_path = os.path.join(script_dir, "tiktok_analyzed.csv")
+    # ---------------- ANALYZE ----------------
+    if args.analyze == 1:
+        analyzed_path = os.path.join(script_dir, args.out_csv)
 
-    print("🔎 Risk analizi (yalnızca bu çalıştırmadaki kayıtlar) başlıyor...")
-    df = add_risk_columns(df, script_dir)
-    print("✅ Risk analizi bitti. Yeni CSV yazılıyor...")
+        print("🔎 Risk analizi (yalnızca bu çalıştırma) başlıyor...")
+        df = add_risk_columns(df, script_dir)
+        print("✅ Risk analizi bitti.")
 
-    df.to_csv(analyzed_path, index=False, encoding="utf-8-sig")
-    print(f"✅ ANALYZED CSV oluşturuldu: {analyzed_path} (satır: {len(df)})")
-
+        # OVERWRITE: aynı isimde dosya varsa üstüne yazar
+        df.to_csv(analyzed_path, index=False, encoding="utf-8-sig")
+        print(
+            f"✅ ANALYZED CSV oluşturuldu: {analyzed_path} (satır: {len(df)})"
+        )
+    else:
+        print("ℹ️ Analyze kapalı, analyzed CSV üretilmedi.")
