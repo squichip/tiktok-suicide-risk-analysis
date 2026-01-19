@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
+venv311/
+
+# OS
+.DS_Store
+
+# Model files (çok büyükse)
+my_suicide_bert_model/
+
+# CSV outputs
+tiktok_raw_data.csv
+tiktok_analyzed.csv
